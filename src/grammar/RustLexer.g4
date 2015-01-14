@@ -11,11 +11,7 @@ tokens {
     COMMENT
 }
 
-/* Note: due to antlr limitations, we can't represent XID_start and
- * XID_continue properly. ASCII-only substitute. */
-
-fragment XID_start : [_a-zA-Z] ;
-fragment XID_continue : [_a-zA-Z0-9] ;
+import xidstart , xidcontinue;
 
 
 /* Expression-operator symbols */
@@ -194,7 +190,7 @@ LIT_STR_RAW
   : 'r' LIT_STR_RAW_INNER SUFFIX?
   ;
 
-IDENT : XID_start XID_continue* ;
+IDENT : XID_Start XID_Continue* ;
 
 LIFETIME : '\'' IDENT ;
 
