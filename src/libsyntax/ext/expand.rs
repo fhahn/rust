@@ -663,12 +663,11 @@ pub fn expand_item_mac(it: P<ast::Item>,
                     // ensure any #[allow_internal_unstable]s are
                     // detected (including nested macro definitions
                     // etc.)
-                    if allow_internal_unstable && !fld.cx.ecfg.enable_allow_internal_unstable() {
-                        feature_gate::emit_feature_err(
-                            &fld.cx.parse_sess.span_diagnostic,
-                            "allow_internal_unstable",
-                            it.span,
-                            feature_gate::EXPLAIN_ALLOW_INTERNAL_UNSTABLE)
+                    if allow_internal_unstable {
+                        match fld.cx.ecfg.features {
+                            Some(ref mut features) => { features.gate_feature("allow_internal_unstable", it.span, feature_gate::EXPLAIN_ALLOW_INTERNAL_UNSTABLE, &fld.cx.parse_sess.span_diagnostic); },
+                        _ => ()
+                        }
                     }
 
                     let def = ast::MacroDef {
@@ -1392,7 +1391,7 @@ fn new_span(cx: &ExtCtxt, sp: Span) -> Span {
 
 pub struct ExpansionConfig<'feat> {
     pub crate_name: String,
-    pub features: Option<&'feat Features>,
+    pub features: Option<&'feat mut Features>,
     pub recursion_limit: usize,
 }
 
@@ -1401,7 +1400,7 @@ macro_rules! feature_tests {
         $(
             pub fn $getter(&self) -> bool {
                 match self.features {
-                    Some(&Features { $field: true, .. }) => true,
+                    Some(&mut Features { $field: true, .. }) => true,
                     _ => false,
                 }
             }

@@ -604,3 +604,23 @@ pub fn check_unused_or_stable_features(sess: &Session,
                       "unused or unknown feature".to_string());
     }
 }
+
+pub fn check_unused_lang_features(sess: &Session) {
+    let ref declared_features = sess.features.borrow().declared_active_lang_features;
+    println!("{:?}", declared_features);
+    println!("{:?}", sess.features.borrow().used_features);
+    let mut remaining_features: FnvHashMap<&str, Span>
+        = declared_features.clone().into_iter().collect();
+
+
+    for used_feature in sess.features.borrow().used_features.iter() {
+        remaining_features.remove(&used_feature[..]);
+    }
+
+    for (_, &span) in remaining_features.iter() {
+        sess.add_lint(lint::builtin::UNUSED_FEATURES,
+                      ast::CRATE_NODE_ID,
+                      span,
+                      "unused or unknown feature".to_string());
+    }
+}

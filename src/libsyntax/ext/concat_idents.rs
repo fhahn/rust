@@ -19,11 +19,15 @@ use ptr::P;
 
 pub fn expand_syntax_ext<'cx>(cx: &mut ExtCtxt, sp: Span, tts: &[ast::TokenTree])
                               -> Box<base::MacResult+'cx> {
-    if !cx.ecfg.enable_concat_idents() {
-        feature_gate::emit_feature_err(&cx.parse_sess.span_diagnostic,
-                                       "concat_idents",
-                                       sp,
-                                       feature_gate::EXPLAIN_CONCAT_IDENTS);
+    let x = match cx.ecfg.features {
+                            Some(ref mut features) => {
+                                println!("USE concat_idents");
+                                features.gate_feature("concat_idents", sp, feature_gate::EXPLAIN_CONCAT_IDENTS, &cx.parse_sess.span_diagnostic) },
+                        _ => true,
+    };
+
+    if !x {
+ 
         return base::DummyResult::expr(sp);
     }
 

@@ -31,6 +31,7 @@ use super::Compilation;
 
 use serialize::json;
 
+use std::collections::HashSet;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
@@ -395,6 +396,9 @@ pub fn phase_2_configure_and_expand(sess: &Session,
     //
     // baz! should not use this definition unless foo is enabled.
 
+    let mut mac_features = HashSet::new();
+    let mut exp_features = HashSet::new();
+
     time(time_passes, "gated macro checking", (), |_| {
         let features =
             syntax::feature_gate::check_crate_macros(sess.codemap(),
@@ -402,7 +406,10 @@ pub fn phase_2_configure_and_expand(sess: &Session,
                                                      &krate);
 
         // these need to be set "early" so that expansion sees `quote` if enabled.
+        mac_features = features.used_features.clone();
+        println!("gated macros {:?}", features.used_features);
         *sess.features.borrow_mut() = features;
+
         sess.abort_if_errors();
     });
 
@@ -477,10 +484,10 @@ pub fn phase_2_configure_and_expand(sess: &Session,
                 new_path.extend(env::split_paths(&_old_path));
                 env::set_var("PATH", &env::join_paths(new_path.iter()).unwrap());
             }
-            let features = sess.features.borrow();
+            let mut features = sess.features.borrow_mut();
             let cfg = syntax::ext::expand::ExpansionConfig {
                 crate_name: crate_name.to_string(),
-                features: Some(&features),
+                features: Some(&mut features),
                 recursion_limit: sess.recursion_limit.get(),
             };
             let ret = syntax::ext::expand::expand_crate(&sess.parse_sess,
@@ -488,6 +495,7 @@ pub fn phase_2_configure_and_expand(sess: &Session,
                                               macros,
                                               syntax_exts,
                                               krate);
+
             if cfg!(windows) {
                 env::set_var("PATH", &_old_path);
             }
@@ -495,6 +503,9 @@ pub fn phase_2_configure_and_expand(sess: &Session,
         }
     );
 
+    exp_features = sess.features.borrow().used_features.clone();
+
+    println!(" after expn {:?}", exp_features);
     // Needs to go *after* expansion to be able to check the results
     // of macro expansion.  This runs before #[cfg] to try to catch as
     // much as possible (e.g. help the programmer avoid platform
@@ -504,6 +515,7 @@ pub fn phase_2_configure_and_expand(sess: &Session,
             syntax::feature_gate::check_crate(sess.codemap(),
                                               &sess.parse_sess.span_diagnostic,
                                               &krate);
+        println!("complete check 1 {:?}", features.used_features);
         *sess.features.borrow_mut() = features;
         sess.abort_if_errors();
     });
@@ -530,11 +542,23 @@ pub fn phase_2_configure_and_expand(sess: &Session,
     // later, to make sure we've got everything (e.g. configuration
     // can insert new attributes via `cfg_attr`)
     time(time_passes, "complete gated feature checking 2", (), |_| {
-        let features =
+        let mut features =
             syntax::feature_gate::check_crate(sess.codemap(),
                                               &sess.parse_sess.span_diagnostic,
                                               &krate);
+
+        for f in mac_features.iter().chain(exp_features.iter()) {
+            features.used_features.insert(f.clone());
+        }
+
+        for f in exp_features.iter() {
+            features.used_features.insert(f.clone());
+        }
+
+        println!("complete check 2 {:?}", features.used_features);
+        //features.used_features = features.used_features.union(&mac_features).collect();
         *sess.features.borrow_mut() = features;
+
         sess.abort_if_errors();
     });
 
@@ -687,6 +711,10 @@ pub fn phase_3_run_analysis_passes<'tcx>(sess: Session,
     time(time_passes, "unused lib feature checking", (), |_|
          stability::check_unused_or_stable_features(
              &ty_cx.sess, lib_features_used));
+
+    time(time_passes, "unused lang feature checking", (), |_|
+         stability::check_unused_lang_features(
+             &ty_cx.sess));
 
     time(time_passes, "lint checking", (), |_|
          lint::check_crate(&ty_cx, &exported_items));

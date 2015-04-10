@@ -37,6 +37,7 @@ use visit::Visitor;
 use parse::token::{self, InternedString};
 
 use std::ascii::AsciiExt;
+use std::collections::HashSet;
 
 // If you change this list without updating src/doc/reference.md, @cmr will be sad
 // Don't ever remove anything from this list; set them to 'Removed'.
@@ -332,7 +333,9 @@ pub struct Features {
     /// spans of #![feature] attrs for stable language features. for error reporting
     pub declared_stable_lang_features: Vec<Span>,
     /// #![feature] attrs for non-language (library) features
-    pub declared_lib_features: Vec<(InternedString, Span)>
+    pub declared_lib_features: Vec<(InternedString, Span)>,
+    pub declared_active_lang_features: Vec<(&'static str, Span)>,
+    pub used_features: HashSet<String>
 }
 
 impl Features {
@@ -352,30 +355,48 @@ impl Features {
             unmarked_api: false,
             negate_unsigned: false,
             declared_stable_lang_features: Vec::new(),
-            declared_lib_features: Vec::new()
+            declared_lib_features: Vec::new(),
+            declared_active_lang_features: Vec::new(),
+            used_features: HashSet::new()
         }
     }
+
+    pub fn gate_feature(&mut self, feature: &str, span: Span, explain: &str, span_handler: &SpanHandler) -> bool {
+        let has_feature = self.declared_active_lang_features.iter().any(|&(n, _)| n == feature);
+        debug!("gate_feature(feature = {:?}, span = {:?}); has? {}", feature, span, has_feature);
+        self.used_features.insert(feature.to_string().clone());
+        if !has_feature {
+            emit_feature_err(span_handler, feature, span, explain);
+            return false;
+        }
+        true
+    }
+
 }
 
 struct Context<'a> {
-    features: Vec<&'static str>,
+    features: Vec<(&'static str, Span)>,
+    used_features: HashSet<String>,
     span_handler: &'a SpanHandler,
     cm: &'a CodeMap,
 }
 
+
 impl<'a> Context<'a> {
-    fn gate_feature(&self, feature: &str, span: Span, explain: &str) {
+    fn gate_feature(&mut self, feature: &str, span: Span, explain: &str) {
         let has_feature = self.has_feature(feature);
         debug!("gate_feature(feature = {:?}, span = {:?}); has? {}", feature, span, has_feature);
+        self.used_features.insert(feature.to_string().clone());
         if !has_feature {
             emit_feature_err(self.span_handler, feature, span, explain);
         }
     }
+
     fn has_feature(&self, feature: &str) -> bool {
-        self.features.iter().any(|&n| n == feature)
+        self.features.iter().any(|&(n, _)| n == feature)
     }
 
-    fn check_attribute(&self, attr: &ast::Attribute) {
+    fn check_attribute(&mut self, attr: &ast::Attribute) {
         debug!("check_attribute(attr = {:?})", attr);
         let name = &*attr.name();
         for &(n, ty) in KNOWN_ATTRIBUTES {
@@ -447,7 +468,7 @@ pub const EXPLAIN_CUSTOM_DERIVE: &'static str =
     "`#[derive]` for custom traits is not stable enough for use and is subject to change";
 
 struct MacroVisitor<'a> {
-    context: &'a Context<'a>
+    context: &'a mut Context<'a>
 }
 
 impl<'a, 'v> Visitor<'v> for MacroVisitor<'a> {
@@ -486,11 +507,11 @@ impl<'a, 'v> Visitor<'v> for MacroVisitor<'a> {
 }
 
 struct PostExpansionVisitor<'a> {
-    context: &'a Context<'a>
+    context: &'a mut Context<'a>
 }
 
 impl<'a> PostExpansionVisitor<'a> {
-    fn gate_feature(&self, feature: &str, span: Span, explain: &str) {
+    fn gate_feature(&mut self, feature: &str, span: Span, explain: &str) {
         if !self.context.cm.span_allows_unstable(span) {
             self.context.gate_feature(feature, span, explain)
         }
@@ -661,14 +682,15 @@ impl<'a, 'v> Visitor<'v> for PostExpansionVisitor<'a> {
     }
 }
 
-fn check_crate_inner<F>(cm: &CodeMap, span_handler: &SpanHandler,
+fn check_crate_inner<'a, F>(cm: &'a CodeMap, span_handler: &'a SpanHandler,
                         krate: &ast::Crate,
                         check: F)
                        -> Features
-    where F: FnOnce(&mut Context, &ast::Crate)
+    where F: FnOnce(& mut Context<'a>, &ast::Crate)
 {
     let mut cx = Context {
         features: Vec::new(),
+        used_features: HashSet::new(),
         span_handler: span_handler,
         cm: cm,
     };
@@ -700,7 +722,7 @@ fn check_crate_inner<F>(cm: &CodeMap, span_handler: &SpanHandler,
                     match KNOWN_FEATURES.iter()
                                         .find(|& &(n, _, _)| name == n) {
                         Some(&(name, _, Active)) => {
-                            cx.features.push(name);
+                            cx.features.push((name, mi.span));
                         }
                         Some(&(_, _, Removed)) => {
                             span_handler.span_err(mi.span, "feature has been removed");
@@ -737,17 +759,19 @@ fn check_crate_inner<F>(cm: &CodeMap, span_handler: &SpanHandler,
         unmarked_api: cx.has_feature("unmarked_api"),
         negate_unsigned: cx.has_feature("negate_unsigned"),
         declared_stable_lang_features: accepted_features,
-        declared_lib_features: unknown_features
+        declared_lib_features: unknown_features,
+        declared_active_lang_features: cx.features.clone(),
+        used_features: cx.used_features.clone()
     }
 }
 
-pub fn check_crate_macros(cm: &CodeMap, span_handler: &SpanHandler, krate: &ast::Crate)
+pub fn check_crate_macros<'a>(cm: &'a CodeMap, span_handler: &'a SpanHandler, krate: &ast::Crate)
 -> Features {
     check_crate_inner(cm, span_handler, krate,
                       |ctx, krate| visit::walk_crate(&mut MacroVisitor { context: ctx }, krate))
 }
 
-pub fn check_crate(cm: &CodeMap, span_handler: &SpanHandler, krate: &ast::Crate)
+pub fn check_crate<'a>(cm: &'a CodeMap, span_handler: &'a SpanHandler, krate: &ast::Crate)
                    -> Features
 {
     check_crate_inner(cm, span_handler, krate,
