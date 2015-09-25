@@ -49,16 +49,19 @@ pub enum RenderSpan {
     /// A FileLine renders with just a line for the message prefixed
     /// by file:linenum.
     FileLine(Span),
+
+    MultiSpan(Vec<Span>),
 }
 
 impl RenderSpan {
-    fn span(&self) -> Span {
+    fn span(&self) -> Vec<Span> {
         match *self {
             FullSpan(s) |
             Suggestion(s, _) |
             EndSpan(s) |
             FileLine(s) =>
-                s
+                vec![s],
+            MultiSpan(ref s) => s.clone()
         }
     }
 }
@@ -425,7 +428,7 @@ impl EmitterWriter {
 
     fn emit_(&mut self, cm: &codemap::CodeMap, rsp: RenderSpan,
              msg: &str, code: Option<&str>, lvl: Level) -> io::Result<()> {
-        let sp = rsp.span();
+        let sp = rsp.span()[0];
 
         // We cannot check equality directly with COMMAND_LINE_SP
         // since PartialEq is manually implemented to ignore the ExpnId
@@ -455,6 +458,9 @@ impl EmitterWriter {
             }
             FileLine(..) => {
                 // no source text in this case!
+            }
+            MultiSpan(..) => {
+                // TODO
             }
         }
 
@@ -619,7 +625,7 @@ impl EmitterWriter {
                 }
 
                 try!(write!(&mut self.dst, "{}", s));
-                let mut s = String::from("^");
+                let mut s = String::from("-");
                 let count = match lastc {
                     // Most terminals have a tab stop every eight columns by default
                     '\t' => 8 - col%8,
